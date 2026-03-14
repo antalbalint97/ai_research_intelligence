@@ -9,7 +9,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,6 +34,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Startup state
+# ---------------------------------------------------------------------------
+_startup_time = time.time()
+_query_count = 0
+_total_latency = 0.0
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Application lifespan – initialize database schema on startup."""
+    try:
+        ensure_schema()
+        logger.info("Database schema verified on startup")
+    except Exception as e:
+        logger.warning("Could not verify database schema on startup: %s", e)
+    yield
+
+
+# ---------------------------------------------------------------------------
 # App setup
 # ---------------------------------------------------------------------------
 app = FastAPI(
@@ -43,6 +64,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS
@@ -61,23 +83,6 @@ app.add_middleware(RequestLoggingMiddleware)
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-
-# ---------------------------------------------------------------------------
-# Startup
-# ---------------------------------------------------------------------------
-_startup_time = time.time()
-_query_count = 0
-_total_latency = 0.0
-
-
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initialize database schema on startup."""
-    try:
-        ensure_schema()
-        logger.info("Database schema verified on startup")
-    except Exception as e:
-        logger.warning("Could not verify database schema on startup: %s", e)
 
 
 # ---------------------------------------------------------------------------

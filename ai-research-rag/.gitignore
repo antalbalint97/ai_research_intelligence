@@ -37,10 +37,11 @@ data/artifacts/*
 .DS_Store
 Thumbs.db
 
-# Coverage
+# Coverage and test cache
 .coverage
 htmlcov/
 .pytest_cache/
+__pycache__/
 
 # Model cache
 models/

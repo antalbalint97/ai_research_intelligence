@@ -40,7 +40,7 @@ class TestAssignTopics:
         assert result.primary_topic == "AI for Robotics"
 
     def test_safety_topic(self) -> None:
-        result = assign_topics("Red-Teaming LLMs", "Jailbreak attacks and defenses.")
+        result = assign_topics("Alignment Techniques for Safe AI", "We study safety and interpretability.")
         assert result.primary_topic == "AI Safety / Alignment"
 
     def test_agents_topic(self) -> None:
