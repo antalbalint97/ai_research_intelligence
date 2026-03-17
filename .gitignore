@@ -29,6 +29,9 @@ data/artifacts/*
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 !data/artifacts/.gitkeep
+data/index/*
+!data/index/.gitkeep
+
 
 # Docker
 *.log
@@ -47,3 +50,8 @@ __pycache__/
 models/
 *.bin
 *.pt
+*.gguf
+*.faiss
+*.index
+*.jsonl
+*.pdf

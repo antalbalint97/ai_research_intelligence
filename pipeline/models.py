@@ -6,18 +6,14 @@ All models use strict type annotations for production-grade data validation.
 
 from __future__ import annotations
 
-from datetime import date, datetime
-from typing import Optional
+from datetime import date
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
 
 class PaperRecord(BaseModel):
-    """Raw paper record parsed from arXiv dataset.
-
-    Represents one paper as loaded from the source data file (JSONL/CSV/JSON).
-    Field names are normalized from various arXiv schema variants.
-    """
+    """Raw paper record parsed from arXiv dataset."""
 
     id: str = Field(..., description="arXiv paper ID (e.g. '2401.12345')")
     title: str = Field(..., description="Paper title")
@@ -35,11 +31,7 @@ class PaperRecord(BaseModel):
 
 
 class DocumentRecord(BaseModel):
-    """Normalized document record ready for embedding and indexing.
-
-    Produced by the document builder after topic mapping and normalization.
-    Each record becomes one or more vector store entries after chunking.
-    """
+    """Normalized document record ready for embedding and indexing."""
 
     doc_id: str = Field(..., description="Unique document identifier")
     paper_id: str = Field(..., description="Source arXiv paper ID")
@@ -88,7 +80,18 @@ class QueryRequest(BaseModel):
 
     query: str = Field(..., min_length=3, description="Natural-language research question")
     filters: Optional[QueryFilters] = None
+    mode: Literal["fast", "full"] = Field(
+        default="fast",
+        description="Inference mode. 'fast' favors lower latency, 'full' favors answer depth.",
+    )
     top_k: int = Field(default=5, ge=1, le=50, description="Number of results to return")
+    retrieval_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Number of initial candidates to retrieve before reranking. "
+        "If omitted, mode-specific defaults are used.",
+    )
 
 
 class QueryResponse(BaseModel):
@@ -100,3 +103,7 @@ class QueryResponse(BaseModel):
     model: str = ""
     retrieval_count: int = 0
     reranked_count: int = 0
+    mode: Literal["fast", "full"] = "fast"
+    timings: dict[str, float] = Field(default_factory=dict)
+    prompt_chars: int = 0
+    answer_chars: int = 0

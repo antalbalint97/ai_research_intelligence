@@ -1,171 +1,231 @@
-"""Text generator – produces answers from context using LLM inference.
+"""
+Local text generator using llama-cpp-python + GGUF quantized instruct models.
 
-Primary: Mistral-7B-Instruct-v0.2 via Hugging Face Inference API.
-Fallback: google/flan-t5-base locally via transformers pipeline.
-
-Implements robust timeout handling and automatic fallback on API errors.
+Supports two inference modes:
+- full: better answer depth, higher latency
+- fast: lower latency, shorter outputs
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import time
-
-import requests
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-HF_API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-HF_TIMEOUT = 60  # seconds
-MISTRAL_MODEL_NAME = "mistral-7b-instruct-v0.2"
-FLAN_MODEL_NAME = "google/flan-t5-base"
 
-# Lazy-loaded local fallback model
-_local_pipeline = None
+DEFAULT_BACKEND = os.environ.get("LLM_BACKEND", "llama_cpp")
 
+DEFAULT_MODEL_PATH = os.environ.get(
+    "LLM_MODEL_PATH", "models/qwen2.5-3b-instruct-q5_k_m.gguf"
+)
+FAST_MODEL_PATH = os.environ.get("LLM_MODEL_PATH_FAST", DEFAULT_MODEL_PATH)
 
-def _get_hf_token() -> str | None:
-    """Retrieve Hugging Face API token from environment."""
-    return os.environ.get("HF_API_TOKEN")
+DEFAULT_N_CTX = int(os.environ.get("LLM_N_CTX", "4096"))
+FAST_N_CTX = int(os.environ.get("LLM_N_CTX_FAST", "2048"))
 
+DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "384"))
+FAST_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS_FAST", "96"))
 
-def _should_fallback() -> bool:
-    """Check if local fallback is enabled."""
-    return os.environ.get("FALLBACK_TO_FLAN", "true").lower() in ("true", "1", "yes")
+DEFAULT_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
+FAST_TEMPERATURE = float(os.environ.get("LLM_TEMPERATURE_FAST", "0.1"))
 
+DEFAULT_TOP_P = float(os.environ.get("LLM_TOP_P", "0.9"))
+FAST_TOP_P = float(os.environ.get("LLM_TOP_P_FAST", "0.85"))
 
-def _get_local_pipeline():
-    """Lazy-load the local flan-t5-base pipeline."""
-    global _local_pipeline
-    if _local_pipeline is None:
-        try:
-            from transformers import pipeline
+DEFAULT_N_THREADS = int(os.environ.get("LLM_N_THREADS", "8"))
+DEFAULT_N_GPU_LAYERS = int(os.environ.get("LLM_N_GPU_LAYERS", "0"))
 
-            logger.info("Loading local fallback model: %s", FLAN_MODEL_NAME)
-            _local_pipeline = pipeline(
-                "text2text-generation",
-                model=FLAN_MODEL_NAME,
-                max_new_tokens=512,
-            )
-        except ImportError:
-            raise ImportError(
-                "transformers is required for local fallback. "
-                "Install with: pip install transformers"
-            )
-    return _local_pipeline
+DEFAULT_CONTEXT_CHAR_LIMIT = int(os.environ.get("LLM_CONTEXT_CHAR_LIMIT", "12000"))
+FAST_CONTEXT_CHAR_LIMIT = int(os.environ.get("LLM_CONTEXT_CHAR_LIMIT_FAST", "3500"))
+
+DEFAULT_VERBOSE = os.environ.get("LLM_VERBOSE", "false").lower() in ("1", "true", "yes")
+
+_llm = None
+_loaded_model_path: str | None = None
 
 
-def generate_with_hf_api(prompt: str, system_prompt: str = "") -> tuple[str, str]:
-    """Generate a response using the Hugging Face Inference API.
+def _get_mode_config(mode: str) -> dict[str, Any]:
+    mode = (mode or "full").strip().lower()
+    if mode == "fast":
+        return {
+            "mode": "fast",
+            "model_path": FAST_MODEL_PATH,
+            "n_ctx": FAST_N_CTX,
+            "max_tokens": FAST_MAX_TOKENS,
+            "temperature": FAST_TEMPERATURE,
+            "top_p": FAST_TOP_P,
+            "context_char_limit": FAST_CONTEXT_CHAR_LIMIT,
+        }
 
-    Args:
-        prompt: The assembled prompt with context and query.
-        system_prompt: System-level instruction for the model.
-
-    Returns:
-        Tuple of (generated_text, model_name).
-
-    Raises:
-        requests.HTTPError: On non-retryable API errors.
-        requests.Timeout: On timeout.
-    """
-    token = _get_hf_token()
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    # Format for Mistral instruct
-    full_prompt = f"[INST] {system_prompt}\n\n{prompt} [/INST]"
-
-    payload = {
-        "inputs": full_prompt,
-        "parameters": {
-            "max_new_tokens": 800,
-            "temperature": 0.3,
-            "top_p": 0.9,
-            "return_full_text": False,
-        },
+    return {
+        "mode": "full",
+        "model_path": DEFAULT_MODEL_PATH,
+        "n_ctx": DEFAULT_N_CTX,
+        "max_tokens": DEFAULT_MAX_TOKENS,
+        "temperature": DEFAULT_TEMPERATURE,
+        "top_p": DEFAULT_TOP_P,
+        "context_char_limit": DEFAULT_CONTEXT_CHAR_LIMIT,
     }
 
-    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=HF_TIMEOUT)
-    response.raise_for_status()
 
-    result = response.json()
-    if isinstance(result, list) and result:
-        text = result[0].get("generated_text", "")
-    elif isinstance(result, dict):
-        text = result.get("generated_text", "")
-    else:
-        text = str(result)
+def _truncate_prompt(prompt: str, max_chars: int) -> str:
+    prompt = (prompt or "").strip()
+    if len(prompt) <= max_chars:
+        return prompt
 
-    return text.strip(), MISTRAL_MODEL_NAME
-
-
-def generate_with_local(prompt: str, system_prompt: str = "") -> tuple[str, str]:
-    """Generate a response using the local flan-t5-base model.
-
-    Args:
-        prompt: The assembled prompt.
-        system_prompt: System-level instruction (prepended to prompt).
-
-    Returns:
-        Tuple of (generated_text, model_name).
-    """
-    pipe = _get_local_pipeline()
-    full_input = f"{system_prompt}\n\n{prompt}" if system_prompt else prompt
-    # Truncate input to avoid OOM on small models
-    max_input_chars = 2048
-    if len(full_input) > max_input_chars:
-        full_input = full_input[:max_input_chars]
-
-    outputs = pipe(full_input)
-    text = outputs[0]["generated_text"] if outputs else ""
-    return text.strip(), FLAN_MODEL_NAME
+    logger.warning(
+        "Prompt too long (%d chars), truncating to %d chars",
+        len(prompt),
+        max_chars,
+    )
+    return prompt[:max_chars].rstrip()
 
 
-def generate(prompt: str, system_prompt: str = "") -> tuple[str, str]:
-    """Generate an answer with automatic fallback.
-
-    Tries the HF Inference API first. On 429/503/timeout errors, falls back
-    to local flan-t5-base if FALLBACK_TO_FLAN is enabled.
-
-    Args:
-        prompt: Assembled prompt with context and query.
-        system_prompt: System-level instruction.
-
-    Returns:
-        Tuple of (generated_text, model_name).
-    """
-    # Try HF API first
-    try:
-        text, model = generate_with_hf_api(prompt, system_prompt)
-        if text:
-            return text, model
-        logger.warning("HF API returned empty response, trying fallback")
-    except requests.exceptions.Timeout:
-        logger.warning("HF API timed out after %ds", HF_TIMEOUT)
-    except requests.exceptions.HTTPError as e:
-        status = e.response.status_code if e.response is not None else 0
-        if status in (429, 503):
-            logger.warning("HF API returned %d, trying fallback", status)
-        else:
-            logger.error("HF API error: %s", e)
-    except requests.exceptions.ConnectionError:
-        logger.warning("HF API connection failed, trying fallback")
-    except Exception as e:
-        logger.error("Unexpected HF API error: %s", e)
-
-    # Fallback to local model
-    if _should_fallback():
-        logger.info("Falling back to local model: %s", FLAN_MODEL_NAME)
-        try:
-            return generate_with_local(prompt, system_prompt)
-        except Exception as e:
-            logger.error("Local fallback also failed: %s", e)
+def _fallback_answer(mode: str) -> str:
+    if (mode or "").lower() == "fast":
+        return (
+            "The local fast mode could not produce a reliable short answer from the "
+            "retrieved context. Please review the sources or try a narrower question."
+        )
 
     return (
-        "I'm sorry, the generation service is temporarily unavailable. "
-        "Please try again in a moment.",
-        "unavailable",
+        "I could not generate a sufficiently strong synthesized answer from the retrieved "
+        "context on the current local setup. Please review the retrieved sources directly "
+        "or try a more specific query."
     )
+
+
+def _load_llama_cpp(model_path: str, n_ctx: int):
+    global _llm, _loaded_model_path
+
+    if _llm is not None and _loaded_model_path == model_path:
+        return _llm, _loaded_model_path
+
+    if not os.path.exists(model_path):
+        raise FileNotFoundError(
+            f"GGUF model file not found: {model_path}. "
+            "Set LLM_MODEL_PATH or LLM_MODEL_PATH_FAST to your local GGUF file."
+        )
+
+    try:
+        from llama_cpp import Llama
+    except ImportError as exc:
+        raise ImportError(
+            "llama-cpp-python is required. Install with: pip install llama-cpp-python"
+        ) from exc
+
+    logger.info("Loading GGUF model with llama.cpp: %s", model_path)
+    logger.info(
+        "llama.cpp config: n_ctx=%d, n_threads=%d, n_gpu_layers=%d",
+        n_ctx,
+        DEFAULT_N_THREADS,
+        DEFAULT_N_GPU_LAYERS,
+    )
+
+    llm = Llama(
+        model_path=model_path,
+        n_ctx=n_ctx,
+        n_threads=DEFAULT_N_THREADS,
+        n_gpu_layers=DEFAULT_N_GPU_LAYERS,
+        verbose=DEFAULT_VERBOSE,
+    )
+
+    _llm = llm
+    _loaded_model_path = model_path
+    logger.info("GGUF model loaded successfully")
+    return _llm, _loaded_model_path
+
+
+def _supports_chat_format(llm: Any) -> bool:
+    return hasattr(llm, "create_chat_completion")
+
+
+def _render_fallback_prompt(system_prompt: str, prompt: str) -> str:
+    system_prompt = (system_prompt or "").strip()
+    prompt = (prompt or "").strip()
+
+    if system_prompt:
+        return f"System:\n{system_prompt}\n\nUser:\n{prompt}\n\nAssistant:\n"
+
+    return f"User:\n{prompt}\n\nAssistant:\n"
+
+
+def generate_with_llama_cpp(
+    prompt: str,
+    system_prompt: str = "",
+    mode: str = "full",
+) -> tuple[str, str]:
+    """Generate an answer using llama-cpp-python from a local GGUF model."""
+    cfg = _get_mode_config(mode)
+    llm, loaded_model_path = _load_llama_cpp(
+        model_path=cfg["model_path"],
+        n_ctx=cfg["n_ctx"],
+    )
+    prompt = _truncate_prompt(prompt, max_chars=cfg["context_char_limit"])
+
+    if _supports_chat_format(llm):
+        messages = []
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+        messages.append({"role": "user", "content": prompt})
+
+        logger.info("Generating response via llama.cpp chat completion | mode=%s", cfg["mode"])
+        response = llm.create_chat_completion(
+            messages=messages,
+            max_tokens=cfg["max_tokens"],
+            temperature=cfg["temperature"],
+            top_p=cfg["top_p"],
+        )
+
+        text = (
+            response.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+            .strip()
+        )
+        return text, loaded_model_path
+
+    rendered_prompt = _render_fallback_prompt(system_prompt=system_prompt, prompt=prompt)
+
+    logger.info("Generating response via llama.cpp text completion | mode=%s", cfg["mode"])
+    response = llm(
+        rendered_prompt,
+        max_tokens=cfg["max_tokens"],
+        temperature=cfg["temperature"],
+        top_p=cfg["top_p"],
+        stop=["User:", "System:"],
+    )
+
+    text = response.get("choices", [{}])[0].get("text", "").strip()
+    return text, loaded_model_path
+
+
+def generate(prompt: str, system_prompt: str = "", mode: str = "full") -> tuple[str, str]:
+    """Main generator entry point used by the RAG pipeline."""
+    backend = DEFAULT_BACKEND.lower().strip()
+    mode = (mode or "full").strip().lower()
+
+    try:
+        if backend != "llama_cpp":
+            raise ValueError(
+                f"Unsupported backend: {backend}. "
+                "This generator.py is configured for llama_cpp."
+            )
+
+        text, model_name = generate_with_llama_cpp(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            mode=mode,
+        )
+
+        if text:
+            return text, model_name
+
+        logger.warning("Generator returned empty text | mode=%s", mode)
+        return _fallback_answer(mode), model_name
+
+    except Exception as exc:
+        logger.exception("Local generation failed | mode=%s: %s", mode, exc)
+        return _fallback_answer(mode), "unavailable"
