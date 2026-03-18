@@ -14,6 +14,9 @@ from ingestion.embedder import warmup_embedder
 from pipeline.rag_pipeline import run_query
 from pipeline.retriever_faiss import warmup as warmup_retriever
 
+TOTAL_REQUESTS = 0
+START_TIME = time.time()
+
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -36,6 +39,7 @@ app.add_middleware(
 def startup_event() -> None:
     """Warm up heavy resources once to avoid first-request latency."""
     startup_start = time.perf_counter()
+
     try:
         warmup_embedder()
     except Exception as exc:
@@ -46,7 +50,10 @@ def startup_event() -> None:
     except Exception as exc:
         logger.warning("Retriever warmup failed: %s", exc)
 
-    logger.info("API startup warmup finished in %.1f ms", (time.perf_counter() - startup_start) * 1000)
+    logger.info(
+        "API startup warmup finished in %.1f ms",
+        (time.perf_counter() - startup_start) * 1000,
+    )
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -56,11 +63,24 @@ def health() -> HealthResponse:
 
 @app.get("/metrics", response_model=MetricsResponse)
 def metrics() -> MetricsResponse:
-    return MetricsResponse(service="ai-research-intelligence", status="ok")
+    return MetricsResponse(
+        service="ai-research-intelligence",
+        status="ok",
+        uptime_seconds=time.time() - START_TIME,
+        total_requests=TOTAL_REQUESTS,
+    )
+
+
+@app.get("/ready")
+def ready():
+    return {"status": "ready"}
 
 
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(request: QueryRequest) -> QueryResponse:
+    global TOTAL_REQUESTS
+    TOTAL_REQUESTS += 1
+
     return run_query(
         query=request.query,
         filters=request.filters,

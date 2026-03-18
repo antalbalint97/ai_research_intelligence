@@ -1,21 +1,20 @@
-# Core
+# Core API
 fastapi>=0.104.0,<1.0.0
 uvicorn[standard]>=0.24.0,<1.0.0
 pydantic>=2.5.0,<3.0.0
 pydantic-settings>=2.1.0,<3.0.0
-
-# Database
-psycopg2-binary>=2.9.9,<3.0.0
-pgvector>=0.2.4,<1.0.0
+requests>=2.31.0,<3.0.0
 
 # ML / NLP
 sentence-transformers>=2.2.2,<3.0.0
 transformers>=4.36.0,<5.0.0
 torch>=2.1.0,<3.0.0
-requests>=2.31.0,<3.0.0
+faiss-cpu>=1.7.4,<2.0.0
+llama-cpp-python>=0.2.90,<1.0.0
 
-# Data
+# Data / app
 pandas>=2.1.0,<3.0.0
+streamlit>=1.32.0,<2.0.0
 
 # Testing
 pytest>=7.4.0,<9.0.0

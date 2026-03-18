@@ -87,3 +87,8 @@ def embed_documents(
 
     logger.info("Embedded %d documents (dim=%d)", len(documents), EMBEDDING_DIM)
     return documents
+
+def warmup_embedder() -> None:
+    """Warm up the embedding model by forcing lazy load."""
+    _get_model()
+    logger.info("Embedder warmup complete")
