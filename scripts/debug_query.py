@@ -16,7 +16,7 @@ import json
 import logging
 from typing import Any
 
-from ingestion.embedder import embed_query
+from ingestion.embedder_optimized import embed_query
 from pipeline.retriever_faiss import search_documents, warmup
 from pipeline.reranker import rerank
 

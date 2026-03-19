@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.middleware import RequestLoggingMiddleware
 from api.schemas import HealthResponse, MetricsResponse, QueryRequest, QueryResponse
-from ingestion.embedder import warmup_embedder
+from ingestion.embedder_optimized import warmup_embedder
 from pipeline.rag_pipeline import run_query
 from pipeline.retriever_faiss import warmup as warmup_retriever
 
@@ -35,25 +35,35 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-def startup_event() -> None:
-    """Warm up heavy resources once to avoid first-request latency."""
-    startup_start = time.perf_counter()
+# @app.on_event("startup")
+# def startup_event() -> None:
+#     """Warm up heavy resources once to avoid first-request latency."""
+#     startup_start = time.perf_counter()
 
-    try:
-        warmup_embedder()
-    except Exception as exc:
-        logger.warning("Embedder warmup failed: %s", exc)
+#     try:
+#         warmup_embedder()
+#     except Exception as exc:
+#         logger.warning("Embedder warmup failed: %s", exc)
 
-    try:
-        warmup_retriever()
-    except Exception as exc:
-        logger.warning("Retriever warmup failed: %s", exc)
+#     try:
+#         warmup_retriever()
+#     except Exception as exc:
+#         logger.warning("Retriever warmup failed: %s", exc)
 
-    logger.info(
-        "API startup warmup finished in %.1f ms",
-        (time.perf_counter() - startup_start) * 1000,
-    )
+#     logger.info(
+#         "API startup warmup finished in %.1f ms",
+#         (time.perf_counter() - startup_start) * 1000,
+#     )
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+@app.post("/warmup")
+def warmup():
+    warmup_embedder()
+    warmup_retriever()
+    return {"status": "warmed"}
 
 
 @app.get("/health", response_model=HealthResponse)

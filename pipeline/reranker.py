@@ -6,10 +6,15 @@ Uses cross-encoder/ms-marco-MiniLM-L-6-v2 for precise relevance scoring.
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
-RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+# RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANKER_MODEL_NAME = os.getenv(
+    "RERANKER_MODEL_NAME",
+    "cross-encoder/ms-marco-MiniLM-L-6-v2",
+)
 
 # Lazy-loaded model singleton
 _reranker = None

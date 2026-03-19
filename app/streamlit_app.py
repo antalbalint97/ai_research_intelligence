@@ -1,30 +1,13 @@
-import sys
+import os
 import time
-from pathlib import Path
 from typing import Any
 
+import requests
 import streamlit as st
 
-# -------------------------------------------------------------------
-# Make project root importable when this file lives under /app
-# -------------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.append(str(PROJECT_ROOT))
-
-from pipeline.rag_pipeline import run_query
-from evaluation.simple_eval import run_evaluation
-from evaluation.smoke_eval import run_smoke_evaluation
-
-try:
-    from pipeline.models import QueryFilters
-except Exception:
-    QueryFilters = None
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 
-# -------------------------------------------------------------------
-# App defaults
-# -------------------------------------------------------------------
 FAST_DEFAULT_TOP_K = 3
 FAST_DEFAULT_RETRIEVAL_K = 8
 
@@ -32,24 +15,17 @@ FULL_DEFAULT_TOP_K = 5
 FULL_DEFAULT_RETRIEVAL_K = 20
 
 
-# -------------------------------------------------------------------
-# Page config
-# -------------------------------------------------------------------
 st.set_page_config(
     page_title="AI Research Intelligence",
-    page_icon="🧠",
+    page_icon="",
     layout="wide",
 )
 
-st.title("🧠 AI Research Intelligence")
+st.title("AI Research Intelligence")
 st.caption("Local RAG pipeline over curated arXiv AI research abstracts")
 
 
-# -------------------------------------------------------------------
-# Helpers
-# -------------------------------------------------------------------
 def get_value(obj: Any, key: str, default: Any = None) -> Any:
-    """Read from either object attributes or dict keys."""
     if obj is None:
         return default
     if isinstance(obj, dict):
@@ -89,11 +65,12 @@ def render_sources(sources: list[Any]) -> None:
             c3.markdown(f"**Score:** {format_score(score)}")
 
             if url:
-                st.markdown(f"[🔗 Open paper]({url})")
+                st.markdown(f"[Open paper]({url})")
 
             if abstract:
                 st.markdown("**Abstract**")
                 st.write(abstract)
+
 
 def format_duration_ms(value: Any) -> str:
     try:
@@ -144,13 +121,12 @@ def render_metrics(response: Any, wall_clock_ms: float | None = None) -> None:
 
 
 def build_filters(primary_topic: str | None, category: str | None, date_from: str | None):
-    if QueryFilters is None:
-        return None
-    return QueryFilters(
-        primary_topic=primary_topic or None,
-        category=category or None,
-        date_from=date_from or None,
-    )
+    filters = {
+        "primary_topic": primary_topic or None,
+        "category": category or None,
+        "date_from": date_from or None,
+    }
+    return {k: v for k, v in filters.items() if v is not None}
 
 
 def resolve_query_params(
@@ -159,7 +135,6 @@ def resolve_query_params(
     retrieval_k: int,
     use_mode_defaults: bool,
 ) -> tuple[int, int]:
-    """Choose effective retrieval parameters for the selected mode."""
     if not use_mode_defaults:
         return top_k, retrieval_k
 
@@ -168,11 +143,10 @@ def resolve_query_params(
 
     return FULL_DEFAULT_TOP_K, FULL_DEFAULT_RETRIEVAL_K
 
-
 # -------------------------------------------------------------------
 # Sidebar
 # -------------------------------------------------------------------
-st.sidebar.header("⚙️ Query Settings")
+st.sidebar.header("Query Settings")
 
 default_query = "What are the main trends in multimodal AI?"
 query = st.sidebar.text_area("Query", value=default_query, height=100)
@@ -230,34 +204,34 @@ show_debug = st.sidebar.checkbox("Show debug tab content", value=False)
 
 run_query_btn = st.sidebar.button("Run query", type="primary")
 
-st.sidebar.markdown("---")
-st.sidebar.subheader("🧪 Evaluation Controls")
+# st.sidebar.markdown("---")
+# st.sidebar.subheader("Evaluation Controls")
 
-eval_mode = st.sidebar.radio(
-    "Smoke eval mode",
-    options=["fast", "full"],
-    index=0,
-    help="Use fast smoke eval for development-time iteration.",
-)
+# eval_mode = st.sidebar.radio(
+#     "Smoke eval mode",
+#     options=["fast", "full"],
+#     index=0,
+#     help="Use fast smoke eval for development-time iteration.",
+# )
 
-smoke_cases = st.sidebar.slider("Smoke eval cases", min_value=1, max_value=10, value=5)
-smoke_top_k = st.sidebar.slider("Smoke eval top_k", min_value=1, max_value=10, value=3)
-smoke_latency_threshold_ms = st.sidebar.number_input(
-    "Smoke latency threshold (ms)",
-    min_value=1000,
-    max_value=600000,
-    value=300000,
-    step=1000,
-)
+# smoke_cases = st.sidebar.slider("Smoke eval cases", min_value=1, max_value=10, value=5)
+# smoke_top_k = st.sidebar.slider("Smoke eval top_k", min_value=1, max_value=10, value=3)
+# smoke_latency_threshold_ms = st.sidebar.number_input(
+#     "Smoke latency threshold (ms)",
+#     min_value=1000,
+#     max_value=600000,
+#     value=300000,
+#     step=1000,
+# )
 
-run_smoke_eval_btn = st.sidebar.button("Run smoke eval")
-run_eval_btn = st.sidebar.button("Run full evaluation suite")
+# run_smoke_eval_btn = st.sidebar.button("Run smoke eval")
+# run_eval_btn = st.sidebar.button("Run full evaluation suite")
 
 
 # -------------------------------------------------------------------
 # Tabs
 # -------------------------------------------------------------------
-tab_query, tab_eval, tab_debug = st.tabs(["🔍 Query", "🧪 Evaluation", "🛠 Debug"])
+tab_query, tab_eval, tab_debug = st.tabs(["Query", "Evaluation", "Debug"])
 
 
 # -------------------------------------------------------------------
@@ -279,28 +253,41 @@ with tab_query:
             date_from=date_from,
         )
 
+        payload = {
+            "query": query,
+            "filters": filters or None,
+            "top_k": effective_top_k,
+            "retrieval_k": effective_retrieval_k,
+            "mode": query_mode,
+        }
+
         with st.spinner(f"Running {query_mode} retrieval, reranking, and generation..."):
             wall_start = time.time()
-            response = run_query(
-                query=query,
-                filters=filters,
-                top_k=effective_top_k,
-                retrieval_k=effective_retrieval_k,
-                mode=query_mode,
-            )
+            try:
+                api_response = requests.post(
+                    f"{API_BASE_URL}/query",
+                    json=payload,
+                    timeout=600,
+                )
+                api_response.raise_for_status()
+                response = api_response.json()
+            except requests.RequestException as exc:
+                st.error(f"API request failed: {exc}")
+                st.stop()
+
             wall_clock_ms = (time.time() - wall_start) * 1000
 
-        st.subheader("🧠 Synthesized Answer")
+        st.subheader("Synthesized Answer")
         answer = get_value(response, "answer", "")
         if answer:
             st.markdown(answer)
         else:
             st.warning("No answer was generated.")
 
-        st.subheader("📊 System Metrics")
+        st.subheader("System Metrics")
         render_metrics(response, wall_clock_ms=wall_clock_ms)
 
-        st.subheader("📚 Top Sources")
+        st.subheader("Top Sources")
         sources = get_value(response, "sources", []) or []
         render_sources(sources)
 
@@ -315,133 +302,136 @@ with tab_query:
         st.info("Showing previous result from this session.")
         response = st.session_state["last_response"]
 
-        st.subheader("🧠 Synthesized Answer")
+        st.subheader("Synthesized Answer")
         st.markdown(get_value(response, "answer", "No answer available."))
 
-        st.subheader("📊 System Metrics")
+        st.subheader("System Metrics")
         render_metrics(
             response,
             wall_clock_ms=st.session_state.get("last_wall_clock_ms"),
         )
 
-        st.subheader("📚 Top Sources")
+        st.subheader("Top Sources")
         render_sources(get_value(response, "sources", []) or [])
     else:
         st.info("Set your query in the sidebar and click **Run query**.")
-
 
 # -------------------------------------------------------------------
 # Evaluation tab
 # -------------------------------------------------------------------
 with tab_eval:
     st.subheader("Evaluation")
-    st.write(
-        "Use smoke evaluation for fast iteration and profiling, "
-        "or run the full evaluation suite for broader end-to-end testing."
-    )
+    st.info("Evaluation is currently run from the backend/CLI, not from the Streamlit UI in Docker.")
 
-    eval_col1, eval_col2 = st.columns(2)
+# with tab_eval:
+#     st.subheader("Evaluation")
+#     st.write(
+#         "Use smoke evaluation for fast iteration and profiling, "
+#         "or run the full evaluation suite for broader end-to-end testing."
+#     )
 
-    with eval_col1:
-        st.markdown("### ⚡ Smoke evaluation")
-        st.caption(
-            "Fast development-time check over a small subset of queries. "
-            "Useful for profiling and optimization."
-        )
+#     eval_col1, eval_col2 = st.columns(2)
 
-    with eval_col2:
-        st.markdown("### 🧱 Full evaluation")
-        st.caption(
-            "Runs the full manually-authored evaluation set. "
-            "This is slower on CPU-only generation."
-        )
+#     with eval_col1:
+#         st.markdown("### Smoke evaluation")
+#         st.caption(
+#             "Fast development-time check over a small subset of queries. "
+#             "Useful for profiling and optimization."
+#         )
 
-    if run_smoke_eval_btn:
-        with st.spinner(f"Running smoke evaluation in {eval_mode} mode..."):
-            try:
-                summary = run_smoke_evaluation(
-                    output_path="data/artifacts/smoke_eval_results.json",
-                    max_cases=smoke_cases,
-                    top_k=smoke_top_k,
-                    latency_threshold_ms=float(smoke_latency_threshold_ms),
-                    mode=eval_mode,
-                )
-            except TypeError:
-                summary = run_smoke_evaluation(
-                    output_path="data/artifacts/smoke_eval_results.json",
-                    max_cases=smoke_cases,
-                    top_k=smoke_top_k,
-                    latency_threshold_ms=float(smoke_latency_threshold_ms),
-                )
-                summary["requested_mode"] = eval_mode
+#     with eval_col2:
+#         st.markdown("### Full evaluation")
+#         st.caption(
+#             "Runs the full manually-authored evaluation set. "
+#             "This is slower on CPU-only generation."
+#         )
 
-        st.success("Smoke evaluation finished.")
-        st.session_state["last_smoke_eval_summary"] = summary
+#     if run_smoke_eval_btn:
+#         with st.spinner(f"Running smoke evaluation in {eval_mode} mode..."):
+#             try:
+#                 summary = run_smoke_evaluation(
+#                     output_path="data/artifacts/smoke_eval_results.json",
+#                     max_cases=smoke_cases,
+#                     top_k=smoke_top_k,
+#                     latency_threshold_ms=float(smoke_latency_threshold_ms),
+#                     mode=eval_mode,
+#                 )
+#             except TypeError:
+#                 summary = run_smoke_evaluation(
+#                     output_path="data/artifacts/smoke_eval_results.json",
+#                     max_cases=smoke_cases,
+#                     top_k=smoke_top_k,
+#                     latency_threshold_ms=float(smoke_latency_threshold_ms),
+#                 )
+#                 summary["requested_mode"] = eval_mode
 
-    elif run_eval_btn:
-        with st.spinner("Running full evaluation suite... This may take a long time on CPU-only setup."):
-            summary = run_evaluation(output_path="data/artifacts/eval_results.json")
+#         st.success("Smoke evaluation finished.")
+#         st.session_state["last_smoke_eval_summary"] = summary
 
-        st.success("Full evaluation finished.")
-        st.session_state["last_full_eval_summary"] = summary
+#     elif run_eval_btn:
+#         with st.spinner("Running full evaluation suite... This may take a long time on CPU-only setup."):
+#             summary = run_evaluation(output_path="data/artifacts/eval_results.json")
 
-    smoke_summary = st.session_state.get("last_smoke_eval_summary")
-    full_summary = st.session_state.get("last_full_eval_summary")
+#         st.success("Full evaluation finished.")
+#         st.session_state["last_full_eval_summary"] = summary
 
-    # ---------------------------
-    # Smoke eval display
-    # ---------------------------
-    st.markdown("---")
-    st.subheader("⚡ Latest smoke evaluation")
+#     smoke_summary = st.session_state.get("last_smoke_eval_summary")
+#     full_summary = st.session_state.get("last_full_eval_summary")
 
-    if smoke_summary:
-        timing = smoke_summary.get("timing_summary", {})
+#     # ---------------------------
+#     # Smoke eval display
+#     # ---------------------------
+#     st.markdown("---")
+#     st.subheader("⚡ Latest smoke evaluation")
 
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric("Mode", smoke_summary.get("mode", "N/A"))
-        c2.metric("Requested mode", smoke_summary.get("requested_mode", smoke_summary.get("config", {}).get("mode", "N/A")))
-        c3.metric("Pass rate", f"{smoke_summary.get('pass_rate', 0.0) * 100:.1f}%")
-        c4.metric("Passed", smoke_summary.get("passed", 0))
-        c5.metric("Failed", smoke_summary.get("failed", 0))
+#     if smoke_summary:
+#         timing = smoke_summary.get("timing_summary", {})
 
-        c6, c7, c8, c9 = st.columns(4)
-        c6.metric("Avg wall-clock (ms)", format_duration_ms(timing.get("avg_wall_clock_ms", 0.0)))
-        c7.metric("Median wall-clock (ms)", format_duration_ms(timing.get("median_wall_clock_ms", 0.0)))
-        c8.metric("Avg pipeline latency (ms)", format_duration_ms(timing.get("avg_pipeline_latency_ms", 0.0)))
-        c9.metric("Median pipeline latency (ms)", format_duration_ms(timing.get("median_pipeline_latency_ms", 0.0)))
+#         c1, c2, c3, c4, c5 = st.columns(5)
+#         c1.metric("Mode", smoke_summary.get("mode", "N/A"))
+#         c2.metric("Requested mode", smoke_summary.get("requested_mode", smoke_summary.get("config", {}).get("mode", "N/A")))
+#         c3.metric("Pass rate", f"{smoke_summary.get('pass_rate', 0.0) * 100:.1f}%")
+#         c4.metric("Passed", smoke_summary.get("passed", 0))
+#         c5.metric("Failed", smoke_summary.get("failed", 0))
 
-        results = smoke_summary.get("results", [])
-        if results:
-            st.subheader("Smoke per-query results")
-            st.dataframe(results, use_container_width=True)
+#         c6, c7, c8, c9 = st.columns(4)
+#         c6.metric("Avg wall-clock (ms)", format_duration_ms(timing.get("avg_wall_clock_ms", 0.0)))
+#         c7.metric("Median wall-clock (ms)", format_duration_ms(timing.get("median_wall_clock_ms", 0.0)))
+#         c8.metric("Avg pipeline latency (ms)", format_duration_ms(timing.get("avg_pipeline_latency_ms", 0.0)))
+#         c9.metric("Median pipeline latency (ms)", format_duration_ms(timing.get("median_pipeline_latency_ms", 0.0)))
 
-        with st.expander("Raw smoke evaluation summary"):
-            st.json(smoke_summary)
-    else:
-        st.info("No smoke evaluation run yet.")
+#         results = smoke_summary.get("results", [])
+#         if results:
+#             st.subheader("Smoke per-query results")
+#             st.dataframe(results, use_container_width=True)
 
-    # ---------------------------
-    # Full eval display
-    # ---------------------------
-    st.markdown("---")
-    st.subheader("🧱 Latest full evaluation")
+#         with st.expander("Raw smoke evaluation summary"):
+#             st.json(smoke_summary)
+#     else:
+#         st.info("No smoke evaluation run yet.")
 
-    if full_summary:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Mode", full_summary.get("mode", "N/A"))
-        c2.metric("Pass rate", f"{full_summary.get('pass_rate', 0.0) * 100:.1f}%")
-        c3.metric("Passed", full_summary.get("passed", 0))
-        c4.metric("Avg latency (ms)", format_duration_ms(full_summary.get("avg_latency_ms", 0.0)))
+#     # ---------------------------
+#     # Full eval display
+#     # ---------------------------
+#     st.markdown("---")
+#     st.subheader("Latest full evaluation")
 
-        results = full_summary.get("results", [])
-        if results:
-            st.subheader("Full evaluation per-query results")
-            st.dataframe(results, use_container_width=True)
+#     if full_summary:
+#         c1, c2, c3, c4 = st.columns(4)
+#         c1.metric("Mode", full_summary.get("mode", "N/A"))
+#         c2.metric("Pass rate", f"{full_summary.get('pass_rate', 0.0) * 100:.1f}%")
+#         c3.metric("Passed", full_summary.get("passed", 0))
+#         c4.metric("Avg latency (ms)", format_duration_ms(full_summary.get("avg_latency_ms", 0.0)))
 
-        with st.expander("Raw full evaluation summary"):
-            st.json(full_summary)
-    else:
-        st.info("No full evaluation run yet.")
+#         results = full_summary.get("results", [])
+#         if results:
+#             st.subheader("Full evaluation per-query results")
+#             st.dataframe(results, use_container_width=True)
+
+#         with st.expander("Raw full evaluation summary"):
+#             st.json(full_summary)
+#     else:
+#         st.info("No full evaluation run yet.")
 
 
 # -------------------------------------------------------------------
@@ -457,8 +447,7 @@ with tab_debug:
         st.code(
             "\n".join(
                 [
-                    f"PROJECT_ROOT = {PROJECT_ROOT}",
-                    f"QueryFilters available = {QueryFilters is not None}",
+                    f"API_BASE_URL = {API_BASE_URL}",
                     f"Selected query mode = {query_mode}",
                     f"Effective top_k = {effective_top_k}",
                     f"Effective retrieval_k = {effective_retrieval_k}",

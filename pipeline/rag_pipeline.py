@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 
-from ingestion.embedder import embed_query
+from ingestion.embedder_optimized import embed_query
 from pipeline.generator import generate
 from pipeline.models import QueryFilters, QueryResponse, SourceCitation
 from pipeline.prompt import (
