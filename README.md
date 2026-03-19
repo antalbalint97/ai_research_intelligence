@@ -10,6 +10,8 @@ This system is built for investors, analysts, and strategy teams who need struct
 
 The corpus is organized around a 12-topic AI taxonomy covering areas such as Multimodal AI, Agents, Reasoning, and Safety. Ingestion is an offline batch process; query serving is fully stateless and self-contained, with no database or API dependency at runtime.
 
+This system is fully local and CPU-only by design. This ensures reproducibility and zero API cost, at the expense of generation latency.
+
 ---
 
 ## Quick Start
@@ -29,11 +31,13 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \
 # 4. (Optional) Download prebuilt index artifacts - skips ~15–20 min of ingestion
 #    See the Prebuilt Artifacts section below
 
-# 5. Start the API
-uvicorn api.main:app --host 0.0.0.0 --port 8000
+# 5. Start the API (Docker - recommended)
+docker compose up --build
 
-# 6. Run the test script (in a separate terminal)
-python scripts/test_api.py
+# 6. Run a test query
+curl -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"query": "What are the recent trends in multimodal AI?", "mode": "fast"}'
 ```
 
 ---
@@ -123,7 +127,9 @@ huggingface-cli download Qwen/Qwen2.5-3B-Instruct-GGUF \
 
 ## Prebuilt Artifacts
 
-A prebuilt FAISS index and metadata file are available on Hugging Face, covering the curated arXiv dataset used in this project:
+You can skip indexing by downloading prebuilt artifacts from Hugging Face.
+
+A prebuilt FAISS index and metadata file are available, covering the curated arXiv dataset used in this project:
 
 [https://huggingface.co/datasets/antalbalint97/ai-research-intelligence-artifacts](https://huggingface.co/datasets/antalbalint97/ai-research-intelligence-artifacts)
 
